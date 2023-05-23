@@ -10,12 +10,12 @@
   <link rel="stylesheet" href="dist/reveal.css">
   <!--  <link rel="stylesheet" href="dist/theme/black.css" id="theme">-->
 
-  <link rel="stylesheet" href="/platformsh.css" id="theme" />
+  <link rel="stylesheet" href="platform/platformsh.css" id="theme" />
 
   <!-- Theme used for syntax highlighted code -->
   <link rel="stylesheet" href="plugin/highlight/monokai.css" id="highlight-theme">
 
-  <style type="text/css">
+  <style>
 
   </style>
 
@@ -50,7 +50,326 @@
 
     <section>
       <section>
+        <h2>So what exactly are statics?</h2>
+        <p class="fragment oversize">Methods bound to a class, not an object</p>
       </section>
+      <section>
+        <h2>So what's wrong with statics?</h2>
+        <p class="fragment oversize">They cannot be mocked for testing</p>
+      </section>
+      <section>
+        <h2>So what exactly are floating functions?</h2>
+        <p class="fragment oversize">Functions defined outside a class</p>
+      </section>
+      <section>
+        <h2>So what's wrong with floating functions?</h2>
+        <p class="fragment oversize">They cannot be mocked for testing</p>
+      </section>
+      <section>
+        <h2>So what are the rules for statics?</h2>
+        <ol>
+          <li class="fragment">Use object methods by default</li>
+          <li class="fragment">When the operation requires a <em>type</em> context</li>
+          <li class="fragment">Static methods should be stateless</li>
+          <li class="fragment">If it's a general-use pure utility, make it a function</li>
+          <li class="fragment">Functions must be pure</li>
+          <li class="fragment">Don't sweat function autoloading</li>
+        </ol>
+      </section>
+    </section>
+    <section>
+      <section>
+        <h2>Never have impure statics</h2>
+      </section>
+      <section>
+        <h2>Don't do this</h2>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          // BAD EXAMPLE
+          class Product
+          {
+              public static function findOneById(int $id): self
+              {
+                  // Some DB logic.
+
+                  // But now you need a service from a static method.
+                  // There's no way to inject it. That forces you
+                  // to have more statics to make them accessible,
+                  // which spiders out through your whole application.
+
+                  return new self();
+              }
+          }
+        </code></pre>
+        <aside class="notes">
+          <ul>
+            <li>Can't mock calls to this method</li>
+            <li>Can't mock the database this method calls</li>
+          </ul>
+        </aside>
+      </section>
+      <section>
+        <h2>Do this instead</h2>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          class ProductRepository {
+              // This is injectable, and thus trivially testable.
+              public function __construct(
+                  private readonly Connection $conn,
+              ) {}
+
+              public function findOneById(int $id): Product
+              {
+                  $record = $this->conn->select(/* ... */);
+
+                  if (!$record) {
+                      throw ProductNotFound::forId($id);
+                  }
+                  // More robust code than this, please.
+                  return new Product(...$record);
+              }
+          }
+        </code></pre>
+        <aside class="notes">
+          <ul>
+            <li>Can mock the database connection</li>
+            <li>Can inject ProductRepository to other services</li>
+            <li>Can mock ProductRepository</li>
+            <li>See the exceptions? Those are OK.</li>
+          </ul>
+        </aside>
+      </section>
+      <section>
+        <h2>Do this instead</h2>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          class ProductRepository {
+              // ...
+              public function findByCategory(string $category): iterable
+              {
+                  $query = ['category' => $category];
+                  $records = $this->conn->select(/* ... */);
+
+                  if (!$records) {
+                      // Returning an empty array would be better.
+                      throw ProductNotFound::forQuery($query);
+                  }
+
+                  foreach ($records as $record) {
+                      yield new Product(...$record);
+                  }
+              }
+          }
+        </code></pre>
+        <aside class="notes">
+          <ul>
+            <li>Can mock the database connection</li>
+            <li>Can inject ProductRepository to other services</li>
+            <li>Can mock ProductRepository</li>
+            <li>See the exceptions? Those are OK.</li>
+          </ul>
+        </aside>
+      </section>
+    </section>
+    <section>
+      <section>
+        <h2>Type-dependent operations</h2>
+      </section>
+      <section>
+        <h3>Named constructors</h3>
+        <pre><code class="php font--14" data-trim data-noescape data-line-numbers>
+          class ProductNotFound extends \InvalidArgumentException
+          {
+              public readonly int $productId;
+              public readonly array $query;
+
+              public static function forId(int $id): self
+              {
+                  $new = new self();
+                  $new->productId = $id;
+
+                  $message = 'Product %d not found.';
+                  $new->message = sprintf($message, $id);
+
+                  return $new;
+              }
+
+              public static function forQuery(array $query): self
+              {
+                  $new = new self();
+                  $new->query = $query;
+
+                  $message = 'No product found for query: %s';
+                  $new->message = sprintf($message, implode(',', $query));
+
+                  return $new;
+              }
+          }
+        </code></pre>
+      </section>
+      <section>
+        <h2>Especially for value objects</h2>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          class Color {
+              private string $color;
+
+              private function __construct() {}
+
+              public function isPale(): bool
+              {
+                  // ...
+              }
+          }
+        </code></pre>
+      </section>
+      <section>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          class Color {
+              // ...
+
+              public static function fromRGB(int $red, int $green, int $blue): self
+              {
+                  $new = new self();
+                  $new->color = '#' . dechex($red) . dechex($green) . dechex($blue);
+                  return $new;
+              }
+
+              public static function fromHex(string $color): self
+              {
+                  $new = new self();
+                  $new->color = '#' . $color;
+                  return $new;
+              }
+          }
+        </code></pre>
+      </section>
+      <section>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          class Color {
+              // ...
+
+              public static function fromHSV(int $hue, int $sat, int $value): self
+              {
+                  [$r, $g, $b] = self::hsv2rgb($hue, $sat, $value);
+                  return self::fromRGB($r, $g, $b);
+              }
+
+              /**
+               * This is a pure function dependency of another static function.
+               * That makes it OK, but it could also just be a function.
+               */
+              private static function hsv2rgb(int $hue, int $sat, int $val): array
+              {
+                  // ...
+              }
+          }
+        </code></pre>
+        <aside class="notes">
+          <ul>
+            <li>Dependent statics are static</li>
+            <li>If they're of narrow use, only related to that type, don't make it a function</li>
+          </ul>
+        </aside>
+      </section>
+    </section>
+    <section>
+      <section>
+        <h2>Registration</h2>
+        <p class="fragment">(Deprecated?)</p>
+      </section>
+      <section>
+        <h2>Several options</h2>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          // Probably the best approach for anything designed new today.
+          #[Command(name: 'product:create')]
+          class CreateProductCommand {
+              // Externally mutable, which is not good.
+              public static string $name = 'product:create';
+
+              // More verbose, but more flexible if some logic is needed.
+              public static function name(): string
+              {
+                  return "product:create";
+              }
+
+              public function run(): void
+              {
+                  // ...
+              }
+          }
+        </code></pre>
+        <aside class="notes">
+          <ul>
+            <li>Static method is common, but verbose.</li>
+            <li>Mostly useful if passing in a value so there's some logic.</li>
+            <li>Static property is simpler, but now mutable.</li>
+            <li>In PHP 8, this is what attributes are for.</li>
+            <li>No more need for static methods!</li>
+          </ul>
+        </aside>
+      </section>
+    </section>
+    <section>
+      <section>
+        <h2>Functions</h2>
+        <p>For when there's no context at all</p>
+      </section>
+      <section>
+        <p>color_util.php</p>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          function hsv2rgb(int $hue, int $sat, int $val): array
+          {
+              // ...
+          }
+        </code></pre>
+        <div class="fragment">
+          <p>composer.json</p>
+          <pre><code class="json" data-trim data-noescape data-line-numbers>
+          "autoload": {
+            "psr-4": {
+                "App\\": "app/"
+            },
+            "files": [
+                "app/utilities/color_util.php"
+            ]
+        },
+        </code></pre>
+        </div>
+        <aside class="notes">
+          <ul>
+            <li>color_utils.php will always be loaded.</li>
+            <li>Uses some extra memory, so keep it limited.</li>
+            <li>Opcache makes it cheap, don't micro-optimize</li>
+            <li>Consider preloading util files as well</li>
+            <li>If the logic is complex enough that you care, make it a class</li>
+          </ul>
+        </aside>
+      </section>
+      <section>
+        <p class="oversize">Pure service objects are totally OK!</p>
+      </section>
+      <section>
+        <p>Impure functions are a hard-no</p>
+        <pre><code class="php" data-trim data-noescape data-line-numbers>
+          // BAD EXAMPLE
+          function getProduct(int $id): Product
+          {
+              // Some DB logic.
+
+              // But now you need a service from a static method.
+              // There's no way to inject it. That forces you
+              // to have more statics to make them accessible,
+              // which spiders out through your whole application.
+          }
+        </code></pre>
+      </section>
+    </section>
+    <section>
+      <h2>In summary</h2>
+      <ul>
+        <li class="fragment">If not sure, use object methods</li>
+        <li class="fragment">Static methods for type-based operations (named constructors)</li>
+        <li class="fragment">Metadata can be done with attributes (but static methods are historically OK)</li>
+        <li class="fragment">Pure utility functions, preloaded</li>
+        <li class="fragment">When in doubt, use object methods</li>
+      </ul>
     </section>
 
     <section id="final">
