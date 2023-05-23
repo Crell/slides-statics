@@ -1,0 +1,4 @@
+name: slide-deck
+recipe: lamp
+config:
+  webroot: .
